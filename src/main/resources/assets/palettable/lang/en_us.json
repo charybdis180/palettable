@@ -1,0 +1,11 @@
+{
+  "itemGroup.palettable": "Palettable",
+  "item.palettable.palette": "Palette",
+
+  "key.categories.palettable": "Palettable",
+  "key.palettable.open": "Open Palette Creator",
+
+  "screen.palettable.title": "Palette Creator",
+
+  "palettable.configuration.title": "Palettable Config"
+}
