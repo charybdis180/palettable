@@ -1,0 +1,11 @@
+{
+  "itemGroup.palletable": "Palletable",
+  "item.palletable.palette": "Palette",
+
+  "key.categories.palletable": "Palletable",
+  "key.palletable.open": "Open Palette Creator",
+
+  "screen.palletable.title": "Palette Creator",
+
+  "palletable.configuration.title": "Palletable Config"
+}
