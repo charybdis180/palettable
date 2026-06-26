@@ -17,7 +17,6 @@ import com.palettable.palette.SavedPalette;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.gui.components.AbstractSliderButton;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
@@ -42,7 +41,11 @@ public class PaletteScreen extends Screen {
     private static final int GUTTER = 6;
     private static final int COL_GAP = 12;
     private static final int PANEL_W = PAD + COLS * CELL + COL_GAP + COLS * CELL + PAD; // 352
-    private static final int PANEL_H = 272;
+    private static final int PANEL_H = 288;
+    private static final int PALETTE_SLOT_ROWS = 2;
+    /** Full width of the creator columns (9 search + 9 gradient). */
+    private static final int PALETTE_SLOT_COLS = COLS * 2;
+    private static final int PALETTE_SLOT_COUNT = PALETTE_SLOT_ROWS * PALETTE_SLOT_COLS;
     private static final int GRADIENT_AREA_W = COLS * CELL;
     private static final int GRADIENT_ROW_MIN = 3;
     private static final int GRADIENT_ROW_MAX = 10;
@@ -84,6 +87,8 @@ public class PaletteScreen extends Screen {
     private int activeSlot = 0; // 0 = A, 1 = B
     private Block slotA;
     private Block slotB;
+    /** User-curated palette slots (right-click search/gradient to fill). */
+    private final Block[] paletteSlots = new Block[PALETTE_SLOT_COUNT];
     private String status = "";
 
     private List<BlockColorEntry> allEntries = List.of();
@@ -92,23 +97,25 @@ public class PaletteScreen extends Screen {
 
     private List<SavedPalette> savedPalettes = new ArrayList<>();
     private int selectedSaved = -1;
-    private List<BlockColorEntry> savedPreview = List.of();
+    /** {@code >= 0} while the inline delete confirmation is shown. */
+    private int pendingDeleteIndex = -1;
+    private int deleteConfirmX, deleteConfirmY, deleteConfirmW, deleteConfirmH;
+    private int deleteConfirmYesX, deleteConfirmNoX, deleteConfirmBtnY;
 
     private int searchScrollRow = 0;
     private int gradientScrollRow = 0;
     private int savedListScroll = 0;
-    private int previewScrollRow = 0;
 
     // ---- Layout (resolved in init) ----
     private int left, top;
-    private int rowSearchY, rowControlsY, rowHeadersY, rowSaveY;
+    private int rowSearchY, rowControlsY, rowHeadersY, rowSaveY, rowPaletteLabelY, sectionRuleY, paletteSlotsY;
     private int slotAX, slotBX, slotsY;
     private int gridY, gridRows;
     private int searchX, gradientX, dividerX;
     private int searchFieldW, maxFieldW, maxFieldX;
     private int hotbarX, hotbarY;
     private int savedListX, savedListY, savedListW, savedListRows;
-    private int previewX, previewY, previewRows;
+    private int previewX, previewY;
     private int tabX, tab0Y, tab1Y;
     private static final int TAB_W = 28;
     private static final int TAB_H = 28;
@@ -135,10 +142,14 @@ public class PaletteScreen extends Screen {
         rowHeadersY = top + 64;
         gridY = top + 76;
         gridRows = 7;
-        rowSaveY = gridY + gridRows * CELL + GUTTER;
+        int gridBottom = gridY + gridRows * CELL;
+        sectionRuleY = gridBottom + GUTTER;
+        rowSaveY = sectionRuleY + 1 + GUTTER - 2;
+        rowPaletteLabelY = rowSaveY + 16 + 4;
+        paletteSlotsY = rowPaletteLabelY + 9;
 
-        hotbarY = top + PANEL_H - PAD - CELL + 4;
-        hotbarX = left + PAD;
+        hotbarX = this.width / 2 - GuiTextures.HOTBAR_LEFT_OFFSET;
+        hotbarY = this.height - GuiTextures.HOTBAR_BOTTOM_OFFSET;
 
         savedListX = searchX;
         savedListY = top + 30;
@@ -147,7 +158,6 @@ public class PaletteScreen extends Screen {
 
         previewX = gradientX;
         previewY = top + 68;
-        previewRows = 7;
 
         tabX = left - TAB_W + 4;
         tab0Y = top + PAD;
@@ -163,18 +173,22 @@ public class PaletteScreen extends Screen {
         searchBox = addRenderableWidget(borderless(searchX, rowSearchY, searchFieldW, 16, "search blocks..."));
         searchBox.setResponder(s -> updateSearch());
 
-        fullBlocksButton = addRenderableWidget(Button.builder(fullBlocksLabel(), b -> {
-            fullBlocksOnly = !fullBlocksOnly;
-            b.setMessage(fullBlocksLabel());
-            updateSearch();
-            updateGradient();
-        }).bounds(searchX + searchFieldW + GUTTER, rowSearchY, left + PANEL_W - PAD - (searchX + searchFieldW + GUTTER), 16).build());
+        int fullBlocksW = left + PANEL_W - PAD - (searchX + searchFieldW + GUTTER);
+        fullBlocksButton = addRenderableWidget(TexturedButton.wide(
+                searchX + searchFieldW + GUTTER, rowSearchY, fullBlocksW, 16,
+                fullBlocksLabel(), b -> {
+                    fullBlocksOnly = !fullBlocksOnly;
+                    b.setMessage(fullBlocksLabel());
+                    updateSearch();
+                    updateGradient();
+                }, GuiTextures.BUTTON));
 
-        sortButton = addRenderableWidget(Button.builder(sortLabel(), b -> {
-            sortByColor = !sortByColor;
-            b.setMessage(sortLabel());
-            updateSearch();
-        }).bounds(sortX, rowControlsY, 88, 16).build());
+        sortButton = addRenderableWidget(TexturedButton.wide(
+                sortX, rowControlsY, 88, 16, sortLabel(), b -> {
+                    sortByColor = !sortByColor;
+                    b.setMessage(sortLabel());
+                    updateSearch();
+                }, GuiTextures.BUTTON));
 
         PaletteGuiSettings guiSettings = PaletteGuiSettings.load();
         fullBlocksOnly = guiSettings.fullBlocksOnly;
@@ -194,21 +208,28 @@ public class PaletteScreen extends Screen {
         int zoomBtnY = rowHeadersY - 5;
         int zoomPlusX = gradientX + GRADIENT_AREA_W - zoomBtnSize;
         int zoomMinusX = zoomPlusX - GUTTER - zoomBtnSize;
-        gradientZoomInButton = addRenderableWidget(Button.builder(Component.literal("+"), b -> zoomGradientRows(-1))
-                .bounds(zoomPlusX, zoomBtnY, zoomBtnSize, zoomBtnSize).build());
-        gradientZoomOutButton = addRenderableWidget(Button.builder(Component.literal("-"), b -> zoomGradientRows(1))
-                .bounds(zoomMinusX, zoomBtnY, zoomBtnSize, zoomBtnSize).build());
+        gradientZoomInButton = addRenderableWidget(TexturedButton.square(
+                zoomPlusX, zoomBtnY, zoomBtnSize, Component.literal("+"), b -> zoomGradientRows(-1),
+                GuiTextures.BUTTON_ZOOM_IN));
+        gradientZoomOutButton = addRenderableWidget(TexturedButton.square(
+                zoomMinusX, zoomBtnY, zoomBtnSize, Component.literal("-"), b -> zoomGradientRows(1),
+                GuiTextures.BUTTON_ZOOM_OUT));
 
         nameBox = addRenderableWidget(borderless(searchX, rowSaveY, 196, 16, "palette name..."));
 
-        saveButton = addRenderableWidget(Button.builder(Component.literal("Save palette"), b -> saveCurrent())
-                .bounds(searchX + 196 + GUTTER, rowSaveY, left + PANEL_W - PAD - (searchX + 196 + GUTTER), 16).build());
+        int saveW = left + PANEL_W - PAD - (searchX + 196 + GUTTER);
+        saveButton = addRenderableWidget(TexturedButton.wide(
+                searchX + 196 + GUTTER, rowSaveY, saveW, 16,
+                Component.literal("Save palette"), b -> saveCurrent(),
+                GuiTextures.BUTTON));
 
-        loadButton = addRenderableWidget(Button.builder(Component.literal("Load into creator"), b -> {
-            if (selectedSaved >= 0 && selectedSaved < savedPalettes.size()) {
-                loadSaved(selectedSaved);
-            }
-        }).bounds(gradientX, top + PANEL_H - PAD - 16, COLS * CELL, 16).build());
+        loadButton = addRenderableWidget(TexturedButton.wide(
+                gradientX, top + PANEL_H - PAD - 16, COLS * CELL, 16,
+                Component.literal("Load into creator"), b -> {
+                    if (selectedSaved >= 0 && selectedSaved < savedPalettes.size()) {
+                        loadSaved(selectedSaved);
+                    }
+                }, GuiTextures.BUTTON));
 
         savedPalettes = PaletteStorage.load();
 
@@ -382,17 +403,16 @@ public class PaletteScreen extends Screen {
     }
 
     private void saveCurrent() {
-        if (slotA == null || slotB == null || gradient.isEmpty()) {
-            status = "Build a gradient first.";
+        List<String> ids = paletteSlotIds();
+        if (ids.stream().allMatch(String::isEmpty)) {
+            status = "Add blocks to the palette (right-click results).";
             return;
         }
         String name = nameBox.getValue().trim();
         if (name.isEmpty()) {
-            name = id(slotA) + " -> " + id(slotB);
+            name = "Palette " + (savedPalettes.size() + 1);
         }
-        List<String> ids = gradient.stream().map(e -> id(e.block())).toList();
-        savedPalettes.add(new SavedPalette(name, id(slotA), id(slotB),
-                threshold, parseMaxList(maxBox), fullBlocksOnly, ids));
+        savedPalettes.add(new SavedPalette(name, ids));
         PaletteStorage.save(savedPalettes);
         nameBox.setValue("");
         status = "Saved \"" + name + "\".";
@@ -400,17 +420,17 @@ public class PaletteScreen extends Screen {
 
     private void loadSaved(int index) {
         SavedPalette sp = savedPalettes.get(index);
-        slotA = resolve(sp.from);
-        slotB = resolve(sp.to);
-        threshold = sp.threshold;
-        thresholdSlider.syncFromThreshold();
-        maxBox.setValue(formatMaxList(sp.max));
-        fullBlocksOnly = sp.fullBlocksOnly;
-        fullBlocksButton.setMessage(fullBlocksLabel());
+        clearPaletteSlots();
+        List<String> blocks = sp.blocks;
+        for (int i = 0; i < paletteSlots.length && i < blocks.size(); i++) {
+            String bid = blocks.get(i);
+            if (bid != null && !bid.isEmpty()) {
+                paletteSlots[i] = resolve(bid);
+            }
+        }
+        nameBox.setValue(sp.name);
         setTab(0);
-        updateSearch();
-        updateGradient();
-        status = "Loaded \"" + sp.name + "\".";
+        status = "Loaded \"" + sp.name + "\" into palette slots.";
     }
 
     private void deleteSaved(int index) {
@@ -419,35 +439,96 @@ public class PaletteScreen extends Screen {
         if (selectedSaved >= savedPalettes.size()) {
             selectedSaved = savedPalettes.size() - 1;
         }
-        rebuildPreview();
         setTab(1);
         status = "Deleted \"" + sp.name + "\".";
     }
 
+    private void confirmDeleteSaved(int index) {
+        if (index < 0 || index >= savedPalettes.size()) {
+            return;
+        }
+        pendingDeleteIndex = index;
+        layoutDeleteConfirmPopup();
+    }
+
+    private void layoutDeleteConfirmPopup() {
+        String text = "Delete?";
+        int textW = this.font.width(text);
+        deleteConfirmW = PAD + textW + GUTTER + GuiTextures.ACTION_BTN_SIZE + 4 + GuiTextures.ACTION_BTN_SIZE + PAD;
+        deleteConfirmH = 24;
+        deleteConfirmX = left + (PANEL_W - deleteConfirmW) / 2;
+        deleteConfirmY = top + (PANEL_H - deleteConfirmH) / 2;
+        deleteConfirmBtnY = deleteConfirmY + (deleteConfirmH - GuiTextures.ACTION_BTN_SIZE) / 2;
+        deleteConfirmYesX = deleteConfirmX + PAD + textW + GUTTER;
+        deleteConfirmNoX = deleteConfirmYesX + GuiTextures.ACTION_BTN_SIZE + 4;
+    }
+
+    private void cancelDeleteConfirm() {
+        pendingDeleteIndex = -1;
+    }
+
     private void selectSaved(int index) {
         selectedSaved = index;
-        rebuildPreview();
-        previewScrollRow = 0;
         setTab(1);
     }
 
-    private void rebuildPreview() {
-        if (selectedSaved < 0 || selectedSaved >= savedPalettes.size()) {
-            savedPreview = List.of();
+    private void clearPaletteSlots() {
+        for (int i = 0; i < paletteSlots.length; i++) {
+            paletteSlots[i] = null;
+        }
+    }
+
+    private List<String> paletteSlotIds() {
+        List<String> ids = new ArrayList<>(paletteSlots.length);
+        for (Block block : paletteSlots) {
+            ids.add(block != null ? id(block) : "");
+        }
+        return ids;
+    }
+
+    private int paletteSlotColX(int col, int originX) {
+        return originX + col * CELL;
+    }
+
+    private int paletteSlotIndex(double mx, double my) {
+        return paletteSlotIndexAt(mx, my, searchX, paletteSlotsY, PALETTE_SLOT_COLS);
+    }
+
+    private int paletteSlotIndexAt(double mx, double my, int originX, int originY, int cols) {
+        for (int i = 0; i < paletteSlots.length; i++) {
+            int col = i % cols;
+            int row = i / cols;
+            int x = paletteSlotColX(col, originX);
+            int y = originY + row * CELL;
+            if (inside(mx, my, x, y, CELL, CELL)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private void addToPaletteSlot(Block block) {
+        if (block == null || BlockColorAnalyzer.get(block) == null) {
             return;
         }
-        List<BlockColorEntry> list = new ArrayList<>();
-        for (String bid : savedPalettes.get(selectedSaved).blocks) {
-            Block block = resolve(bid);
-            if (block == null) {
-                continue;
-            }
-            BlockColorEntry e = BlockColorAnalyzer.get(block);
-            if (e != null) {
-                list.add(e);
+        for (int i = 0; i < paletteSlots.length; i++) {
+            if (paletteSlots[i] == null) {
+                paletteSlots[i] = block;
+                status = "";
+                return;
             }
         }
-        savedPreview = list;
+        status = "Palette slots are full.";
+    }
+
+    private int filledPaletteSlotCount() {
+        int count = 0;
+        for (Block block : paletteSlots) {
+            if (block != null) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private String id(Block block) {
@@ -517,9 +598,9 @@ public class PaletteScreen extends Screen {
         renderTabs(g, mouseX, mouseY);
         drawPanel(g, left, top, PANEL_W, PANEL_H);
         if (tab == 0) {
-            drawInset(g, searchX, rowSearchY, searchFieldW, 16);
-            drawInset(g, maxFieldX, rowControlsY, maxFieldW, 16);
-            drawInset(g, searchX, rowSaveY, 196, 16);
+            drawTextField(g, searchX, rowSearchY, searchFieldW, 16);
+            drawTextField(g, maxFieldX, rowControlsY, maxFieldW, 16);
+            drawTextField(g, searchX, rowSaveY, 196, 16);
         }
         super.render(g, mouseX, mouseY, partialTick);
 
@@ -544,6 +625,23 @@ public class PaletteScreen extends Screen {
         } else if (!hoveredStack.isEmpty()) {
             g.renderTooltip(this.font, hoveredStack, mouseX, mouseY);
         }
+
+        if (pendingDeleteIndex >= 0) {
+            renderDeleteConfirmPopup(g, mouseX, mouseY);
+        }
+    }
+
+    private void renderDeleteConfirmPopup(GuiGraphics g, int mouseX, int mouseY) {
+        g.fill(left, top, left + PANEL_W, top + PANEL_H, 0x90000000);
+        drawPanel(g, deleteConfirmX, deleteConfirmY, deleteConfirmW, deleteConfirmH);
+        g.drawString(this.font, "Delete?", deleteConfirmX + PAD, deleteConfirmY + 8, COL_TEXT, false);
+        drawActionButton(g, deleteConfirmYesX, deleteConfirmBtnY, GuiTextures.ACTION_CONFIRM, mouseX, mouseY);
+        drawActionButton(g, deleteConfirmNoX, deleteConfirmBtnY, GuiTextures.ACTION_DELETE, mouseX, mouseY);
+    }
+
+    private void drawActionButton(GuiGraphics g, int x, int y, ResourceLocation texture, int mouseX, int mouseY) {
+        boolean hover = inside(mouseX, mouseY, x, y, GuiTextures.ACTION_BTN_SIZE, GuiTextures.ACTION_BTN_SIZE);
+        GuiTextures.blitActionButton(g, texture, x, y, hover ? GuiTextures.TINT_HOVER : GuiTextures.TINT_NORMAL);
     }
 
     private BlockColorEntry renderCreator(GuiGraphics g, int mouseX, int mouseY) {
@@ -570,8 +668,55 @@ public class PaletteScreen extends Screen {
             g.drawString(this.font, hint, gradientX + 6, gridY + 4, COL_TEXT_MUTED, false);
         }
 
-        drawSectionRule(g, rowSaveY + 20);
+        drawSectionRule(g, sectionRuleY);
+
+        drawLabel(g, "Palette (" + filledPaletteSlotCount() + "/" + PALETTE_SLOT_COUNT + ")", searchX, rowPaletteLabelY);
+        hovered = orElse(hovered, drawPaletteSlots(g, mouseX, mouseY, paletteSlots, searchX, paletteSlotsY, PALETTE_SLOT_COLS));
         return hovered;
+    }
+
+    private BlockColorEntry drawPaletteSlots(GuiGraphics g, int mouseX, int mouseY, Block[] slots,
+                                             int originX, int originY, int cols) {
+        BlockColorEntry hovered = null;
+        for (int i = 0; i < slots.length; i++) {
+            int col = i % cols;
+            int row = i / cols;
+            int cx = paletteSlotColX(col, originX);
+            int cy = originY + row * CELL;
+            drawInset(g, cx, cy, CELL, CELL);
+            Block block = slots[i];
+            if (block != null) {
+                g.renderItem(new ItemStack(block), cx + 1, cy + 1);
+                BlockColorEntry entry = BlockColorAnalyzer.get(block);
+                if (inside(mouseX, mouseY, cx, cy, CELL, CELL)) {
+                    g.fill(cx + 1, cy + 1, cx + CELL - 1, cy + CELL - 1, COL_HOVER);
+                    hovered = entry;
+                }
+            }
+        }
+        return hovered;
+    }
+
+    private Block[] blocksFromSaved(SavedPalette sp) {
+        Block[] slots = new Block[PALETTE_SLOT_COUNT];
+        List<String> blocks = sp.blocks;
+        for (int i = 0; i < slots.length && i < blocks.size(); i++) {
+            String bid = blocks.get(i);
+            if (bid != null && !bid.isEmpty()) {
+                slots[i] = resolve(bid);
+            }
+        }
+        return slots;
+    }
+
+    private int countSavedBlocks(SavedPalette sp) {
+        int count = 0;
+        for (String bid : sp.blocks) {
+            if (bid != null && !bid.isEmpty()) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private void drawColumnDivider(GuiGraphics g, int y1, int y2) {
@@ -592,19 +737,20 @@ public class PaletteScreen extends Screen {
         if (player == null) {
             return ItemStack.EMPTY;
         }
-        drawLabel(g, "Hotbar", hotbarX, hotbarY - 10);
         ItemStack hovered = ItemStack.EMPTY;
+        int slot = GuiTextures.HOTBAR_SLOT_SIZE;
+        int itemInset = GuiTextures.HOTBAR_ITEM_INSET;
         for (int i = 0; i < COLS; i++) {
-            int cx = hotbarX + i * CELL;
+            int cx = hotbarX + i * slot;
             int cy = hotbarY;
-            drawInset(g, cx, cy, CELL, CELL);
+            GuiTextures.blitHotbarSlot(g, cx, cy);
             ItemStack stack = player.getInventory().getItem(i);
             if (!stack.isEmpty()) {
-                g.renderItem(stack, cx + 1, cy + 1);
-                g.renderItemDecorations(this.font, stack, cx + 1, cy + 1);
+                g.renderItem(stack, cx + itemInset, cy + itemInset);
+                g.renderItemDecorations(this.font, stack, cx + itemInset, cy + itemInset);
             }
-            if (inside(mouseX, mouseY, cx, cy, CELL, CELL)) {
-                g.fill(cx + 1, cy + 1, cx + CELL - 1, cy + CELL - 1, COL_HOVER);
+            if (inside(mouseX, mouseY, cx, cy, slot, slot)) {
+                g.fill(cx + 1, cy + 1, cx + slot - 1, cy + slot - 1, COL_HOVER);
                 hovered = stack;
             }
         }
@@ -627,9 +773,7 @@ public class PaletteScreen extends Screen {
             String name = savedPalettes.get(idx).name;
             g.drawString(this.font, trim(name, savedListW - 22), savedListX + 4, ry + 4, COL_TEXT, false);
             int xb = savedListX + savedListW - 15;
-            boolean xHover = inside(mouseX, mouseY, xb, ry + 1, 13, 13);
-            g.fill(xb, ry + 1, xb + 13, ry + 14, xHover ? 0xFFD05050 : 0xFF8B3030);
-            g.drawString(this.font, "x", xb + 4, ry + 3, 0xFFFFFFFF, false);
+            drawActionButton(g, xb, ry + 1, GuiTextures.ACTION_DELETE, mouseX, mouseY);
         }
 
         if (savedPalettes.isEmpty()) {
@@ -641,13 +785,8 @@ public class PaletteScreen extends Screen {
         if (selectedSaved >= 0 && selectedSaved < savedPalettes.size()) {
             SavedPalette sp = savedPalettes.get(selectedSaved);
             g.drawString(this.font, trim(sp.name, COLS * CELL), previewX, top + 30, COL_TEXT, false);
-            drawBigSlot(g, mouseX, mouseY, previewX, top + 44, resolve(sp.from), false, "A");
-            drawBigSlot(g, mouseX, mouseY, previewX + 20, top + 44, resolve(sp.to), false, "B");
-            g.drawString(this.font, savedPreview.size() + " blocks", previewX + 44, top + 46, COL_TEXT, false);
-            g.drawString(this.font, String.format(Locale.ROOT, "thr %.1f  max %s", sp.threshold,
-                            sp.max <= 0 ? "all" : Integer.toString(sp.max)),
-                    previewX + 44, top + 55, COL_TEXT_MUTED, false);
-            return drawGrid(g, mouseX, mouseY, savedPreview, previewX, previewY, previewRows, previewScrollRow, CELL, COLS, true);
+            g.drawString(this.font, countSavedBlocks(sp) + " blocks", previewX + 44, top + 46, COL_TEXT, false);
+            return drawPaletteSlots(g, mouseX, mouseY, blocksFromSaved(sp), previewX, previewY, COLS);
         }
         g.drawString(this.font, "Select a palette to preview.", previewX, top + 30, COL_TEXT_MUTED, false);
         return null;
@@ -659,17 +798,7 @@ public class PaletteScreen extends Screen {
     }
 
     private void drawTab(GuiGraphics g, int x, int y, boolean active, ItemStack icon, int mouseX, int mouseY) {
-        int bg = active ? COL_PANEL : 0xFFA0A0A0;
-        g.fill(x, y, x + TAB_W, y + TAB_H, bg);
-        g.fill(x, y, x + TAB_W, y + 1, COL_HILIGHT);
-        g.fill(x, y, x + 1, y + TAB_H, COL_HILIGHT);
-        g.fill(x, y + TAB_H - 1, x + TAB_W, y + TAB_H, COL_SHADOW);
-        if (!active) {
-            g.fill(x + TAB_W - 1, y, x + TAB_W, y + TAB_H, COL_SHADOW);
-        } else {
-            // Blend active tab into the panel edge.
-            g.fill(x + TAB_W - 1, y + 1, x + TAB_W, y + TAB_H - 1, COL_PANEL);
-        }
+        GuiTextures.blitTab(g, active ? GuiTextures.TAB_ACTIVE : GuiTextures.TAB_INACTIVE, x, y);
         g.renderItem(icon, x + 5, y + 5);
         if (inside(mouseX, mouseY, x, y, TAB_W, TAB_H)) {
             g.fill(x + 1, y + 1, x + TAB_W - 1, y + TAB_H - 1, COL_HOVER);
@@ -681,20 +810,17 @@ public class PaletteScreen extends Screen {
     }
 
     private void drawPanel(GuiGraphics g, int x, int y, int w, int h) {
-        g.fill(x, y, x + w, y + h, COL_PANEL);
-        g.fill(x, y, x + w, y + 1, COL_HILIGHT);
-        g.fill(x, y, x + 1, y + h, COL_HILIGHT);
-        g.fill(x + w - 1, y, x + w, y + h, COL_SHADOW);
-        g.fill(x, y + h - 1, x + w, y + h, COL_SHADOW);
+        GuiTextures.blitPanel(g, x, y, w, h);
     }
 
-    /** Recessed (inset) rectangle: dark top-left, light bottom-right -- like an inventory slot. */
+    /** Recessed slot / grid cell background ({@code slot.png}). */
     private void drawInset(GuiGraphics g, int x, int y, int w, int h) {
-        g.fill(x, y, x + w, y + h, COL_INSET_BG);
-        g.fill(x, y, x + w, y + 1, COL_INSET_DARK);
-        g.fill(x, y, x + 1, y + h, COL_INSET_DARK);
-        g.fill(x, y + h - 1, x + w, y + h, COL_HILIGHT);
-        g.fill(x + w - 1, y, x + w, y + h, COL_HILIGHT);
+        GuiTextures.blitSlot(g, x, y, w, h);
+    }
+
+    /** Text input background ({@code text_field.png}). */
+    private void drawTextField(GuiGraphics g, int x, int y, int w, int h) {
+        GuiTextures.blitTextField(g, x, y, w, h);
     }
 
     private BlockColorEntry drawBigSlot(GuiGraphics g, int mouseX, int mouseY, int x, int y, Block block, boolean active, String label) {
@@ -801,6 +927,10 @@ public class PaletteScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (pendingDeleteIndex >= 0 && handleDeleteConfirmClick(mouseX, mouseY)) {
+            return true;
+        }
+
         if (super.mouseClicked(mouseX, mouseY, button)) {
             return true;
         }
@@ -818,6 +948,23 @@ public class PaletteScreen extends Screen {
             return creatorClicked(mouseX, mouseY, button);
         }
         return savedClicked(mouseX, mouseY, button);
+    }
+
+    private boolean handleDeleteConfirmClick(double mouseX, double mouseY) {
+        if (inside(mouseX, mouseY, deleteConfirmYesX, deleteConfirmBtnY, GuiTextures.ACTION_BTN_SIZE, GuiTextures.ACTION_BTN_SIZE)) {
+            int index = pendingDeleteIndex;
+            pendingDeleteIndex = -1;
+            deleteSaved(index);
+            return true;
+        }
+        if (inside(mouseX, mouseY, deleteConfirmNoX, deleteConfirmBtnY, GuiTextures.ACTION_BTN_SIZE, GuiTextures.ACTION_BTN_SIZE)) {
+            cancelDeleteConfirm();
+            return true;
+        }
+        if (!inside(mouseX, mouseY, deleteConfirmX, deleteConfirmY, deleteConfirmW, deleteConfirmH)) {
+            cancelDeleteConfirm();
+        }
+        return true;
     }
 
     private boolean creatorClicked(double mouseX, double mouseY, int button) {
@@ -849,19 +996,38 @@ public class PaletteScreen extends Screen {
 
         int sIdx = cellIndex(mouseX, mouseY, searchX, gridY, gridRows, searchScrollRow, CELL, COLS);
         if (sIdx >= 0 && sIdx < searchResults.size()) {
-            assignToActiveSlot(searchResults.get(sIdx).block());
+            Block block = searchResults.get(sIdx).block();
+            if (button == 1) {
+                addToPaletteSlot(block);
+            } else {
+                assignToActiveSlot(block);
+            }
             return true;
         }
         int gIdx = gradientCellIndex(mouseX, mouseY);
         if (gIdx >= 0 && gIdx < gradient.size()) {
-            assignToActiveSlot(gradient.get(gIdx).block());
+            Block block = gradient.get(gIdx).block();
+            if (button == 1) {
+                addToPaletteSlot(block);
+            } else {
+                assignToActiveSlot(block);
+            }
+            return true;
+        }
+
+        int pIdx = paletteSlotIndex(mouseX, mouseY);
+        if (pIdx >= 0) {
+            if (button == 1) {
+                paletteSlots[pIdx] = null;
+            }
             return true;
         }
 
         LocalPlayer player = Minecraft.getInstance().player;
         if (player != null) {
             for (int i = 0; i < COLS; i++) {
-                if (inside(mouseX, mouseY, hotbarX + i * CELL, hotbarY, CELL, CELL)) {
+                if (inside(mouseX, mouseY, hotbarX + i * GuiTextures.HOTBAR_SLOT_SIZE, hotbarY,
+                        GuiTextures.HOTBAR_SLOT_SIZE, GuiTextures.HOTBAR_SLOT_SIZE)) {
                     ItemStack stack = player.getInventory().getItem(i);
                     if (stack.getItem() instanceof BlockItem blockItem
                             && BlockColorAnalyzer.get(blockItem.getBlock()) != null) {
@@ -882,8 +1048,8 @@ public class PaletteScreen extends Screen {
             }
             int ry = savedListY + r * 16;
             int xb = savedListX + savedListW - 15;
-            if (inside(mouseX, mouseY, xb, ry + 1, 13, 13)) {
-                deleteSaved(idx);
+            if (inside(mouseX, mouseY, xb, ry + 1, GuiTextures.ACTION_BTN_SIZE, GuiTextures.ACTION_BTN_SIZE)) {
+                confirmDeleteSaved(idx);
                 return true;
             }
             if (inside(mouseX, mouseY, savedListX, ry, savedListW, 15)) {
@@ -934,10 +1100,6 @@ public class PaletteScreen extends Screen {
             if (inside(mouseX, mouseY, savedListX, savedListY, savedListW, savedListRows * 16)) {
                 int max = Math.max(0, savedPalettes.size() - savedListRows);
                 savedListScroll = Math.max(0, Math.min(max, savedListScroll - dir));
-                return true;
-            }
-            if (inside(mouseX, mouseY, previewX, previewY, COLS * CELL, previewRows * CELL)) {
-                previewScrollRow = clampScroll(previewScrollRow - dir, savedPreview.size(), previewRows, COLS);
                 return true;
             }
         }
@@ -1009,15 +1171,15 @@ public class PaletteScreen extends Screen {
         return false;
     }
 
-    /** Vanilla-styled slider that drives the gradient distance {@link #threshold}. */
-    private class ThresholdSlider extends AbstractSliderButton {
+    /** Threshold slider with editable track/handle PNGs. */
+    private class ThresholdSlider extends TexturedSlider {
         ThresholdSlider(int x, int y, int w, int h) {
-            super(x, y, w, h, Component.empty(), Mth.clamp(threshold / MAX_THRESHOLD, 0.0, 1.0));
+            super(x, y, w, h, Component.empty(), clampValue(threshold / MAX_THRESHOLD));
             updateMessage();
         }
 
         void syncFromThreshold() {
-            this.value = Mth.clamp(threshold / MAX_THRESHOLD, 0.0, 1.0);
+            this.value = clampValue(threshold / MAX_THRESHOLD);
             updateMessage();
         }
 

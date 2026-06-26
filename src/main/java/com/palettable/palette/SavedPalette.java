@@ -19,6 +19,11 @@ public class SavedPalette {
     public SavedPalette() {
     }
 
+    public SavedPalette(String name, List<String> blocks) {
+        this.name = name;
+        this.blocks = new ArrayList<>(blocks);
+    }
+
     public SavedPalette(String name, String from, String to, double threshold, int max,
                         boolean fullBlocksOnly, List<String> blocks) {
         this.name = name;
