@@ -1,4 +1,5 @@
 """Generate default Palettable GUI textures (editable PNGs in assets)."""
+import math
 from pathlib import Path
 
 try:
@@ -131,6 +132,28 @@ def make_action_button(bg, icon):
     return img
 
 
+def make_tab_icon_gear(size=16):
+    """16x16 gear for the Settings tab (dark pixels on transparent)."""
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    dark = (55, 55, 55)
+    mid = (85, 85, 85)
+    cx, cy = size // 2, size // 2
+    for y in range(size):
+        for x in range(size):
+            dx, dy = x - cx, y - cy
+            dist = (dx * dx + dy * dy) ** 0.5
+            angle = math.atan2(dy, dx)
+            # eight teeth + hub
+            tooth = abs(math.cos(4 * angle))
+            outer = 6.2 + 1.8 * tooth
+            inner = 2.8
+            if inner <= dist <= outer:
+                img.putpixel((x, y), (mid if dist > 5.0 else dark) + (255,))
+            elif dist < inner:
+                img.putpixel((x, y), dark + (255,))
+    return img
+
+
 if __name__ == "__main__":
     save("panel.png", make_panel())
     save("text_field.png", make_inset())
@@ -145,3 +168,4 @@ if __name__ == "__main__":
     save("hotbar_slot.png", make_hotbar_slot(20))
     save("action_confirm.png", make_action_button((48, 139, 48), "check"))
     save("action_delete.png", make_action_button((139, 48, 48), "cross"))
+    save("tab_icon_gear.png", make_tab_icon_gear())

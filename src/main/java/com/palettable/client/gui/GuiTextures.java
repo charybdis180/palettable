@@ -15,6 +15,8 @@ public final class GuiTextures {
 
     public static final int TAB_TEX_W = 28;
     public static final int TAB_TEX_H = 28;
+    /** Tab icon PNG size ({@code tab_icon_gear.png}). */
+    public static final int TAB_ICON_SIZE = 16;
 
     public static final int BUTTON_TEX_W = 20;
     public static final int BUTTON_TEX_H = 16;
@@ -32,64 +34,62 @@ public final class GuiTextures {
     public static final int HOTBAR_BOTTOM_OFFSET = 22;
     public static final int HOTBAR_ITEM_INSET = 3;
 
-    /** Must match {@code hotbar_slot.png} pixel size (20x20). */
-    public static final ResourceLocation HOTBAR_SLOT = gui("hotbar_slot");
-
-    /** Confirm/delete icon buttons ({@code action_confirm.png}, {@code action_delete.png}) — 13x13 each. */
+    /** Confirm/delete icon buttons — 13x13 each. */
     public static final int ACTION_BTN_SIZE = 13;
-    public static final ResourceLocation ACTION_CONFIRM = gui("action_confirm");
-    public static final ResourceLocation ACTION_DELETE = gui("action_delete");
 
     /** Full-strength texture; channels multiply the PNG pixel colors. */
     public static final int TINT_NORMAL = 0xFFFFFFFF;
     /** Warm highlight applied on hover (no second PNG needed). */
     public static final int TINT_HOVER = 0xFFFFF0CC;
 
-    public static final ResourceLocation PANEL = gui("panel");
-    public static final ResourceLocation TEXT_FIELD = gui("text_field");
-    public static final ResourceLocation SLOT = gui("slot");
-    public static final ResourceLocation TAB_ACTIVE = gui("tab_active");
-    public static final ResourceLocation TAB_INACTIVE = gui("tab_inactive");
-
-    /** Shared wide button texture (20x16); used by all text buttons except zoom +/-. */
-    public static final ResourceLocation BUTTON = gui("button");
-    public static final ResourceLocation BUTTON_ZOOM_IN = gui("button_zoom_in");
-    public static final ResourceLocation BUTTON_ZOOM_OUT = gui("button_zoom_out");
-    /** Must match {@code slider_track.png} pixel size (20x16). */
-    public static final ResourceLocation SLIDER_TRACK = gui("slider_track");
-    /** Must match {@code slider_handle.png} pixel size (8x16). */
-    public static final ResourceLocation SLIDER_HANDLE = gui("slider_handle");
+    private static GuiSkin skin = GuiSkin.DEFAULT;
 
     private GuiTextures() {}
 
-    private static ResourceLocation gui(String name) {
-        return ResourceLocation.fromNamespaceAndPath(Palettable.MODID, "textures/gui/" + name + ".png");
+    public static GuiSkin getSkin() {
+        return skin;
+    }
+
+    public static void setSkin(GuiSkin newSkin) {
+        skin = newSkin != null ? newSkin : GuiSkin.DEFAULT;
+    }
+
+    /** Base PNG name without suffix or extension, e.g. {@code "panel"} → {@code panel_dark.png}. */
+    public static ResourceLocation resolve(String baseName) {
+        return ResourceLocation.fromNamespaceAndPath(Palettable.MODID,
+                "textures/gui/" + baseName + skin.fileSuffix() + ".png");
     }
 
     public static void blitPanel(GuiGraphics g, int x, int y, int width, int height) {
-        blitNineSliced(g, PANEL, x, y, width, height, PANEL_TEX_SIZE, PANEL_TEX_SIZE, PANEL_BORDER);
+        blitNineSliced(g, resolve("panel"), x, y, width, height, PANEL_TEX_SIZE, PANEL_TEX_SIZE, PANEL_BORDER);
     }
 
     public static void blitTextField(GuiGraphics g, int x, int y, int width, int height) {
-        blitNineSliced(g, TEXT_FIELD, x, y, width, height, INSET_TEX_SIZE, INSET_TEX_SIZE, INSET_BORDER);
+        blitNineSliced(g, resolve("text_field"), x, y, width, height, INSET_TEX_SIZE, INSET_TEX_SIZE, INSET_BORDER);
     }
 
     public static void blitSlot(GuiGraphics g, int x, int y, int width, int height) {
-        blitNineSliced(g, SLOT, x, y, width, height, INSET_TEX_SIZE, INSET_TEX_SIZE, INSET_BORDER);
+        blitNineSliced(g, resolve("slot"), x, y, width, height, INSET_TEX_SIZE, INSET_TEX_SIZE, INSET_BORDER);
     }
 
     public static void blitHotbarSlot(GuiGraphics g, int x, int y) {
-        blit(g, HOTBAR_SLOT, x, y, HOTBAR_SLOT_SIZE, HOTBAR_SLOT_SIZE,
+        blit(g, resolve("hotbar_slot"), x, y, HOTBAR_SLOT_SIZE, HOTBAR_SLOT_SIZE,
                 HOTBAR_SLOT_SIZE, HOTBAR_SLOT_SIZE, TINT_NORMAL);
     }
 
-    public static void blitActionButton(GuiGraphics g, ResourceLocation texture, int x, int y, int tint) {
-        blit(g, texture, x, y, ACTION_BTN_SIZE, ACTION_BTN_SIZE,
+    public static void blitActionButton(GuiGraphics g, String baseName, int x, int y, int tint) {
+        blit(g, resolve(baseName), x, y, ACTION_BTN_SIZE, ACTION_BTN_SIZE,
                 ACTION_BTN_SIZE, ACTION_BTN_SIZE, tint);
     }
 
-    public static void blitTab(GuiGraphics g, ResourceLocation texture, int x, int y) {
-        blit(g, texture, x, y, TAB_TEX_W, TAB_TEX_H, TAB_TEX_W, TAB_TEX_H, TINT_NORMAL);
+    public static void blitTab(GuiGraphics g, boolean active, int x, int y) {
+        blit(g, resolve(active ? "tab_active" : "tab_inactive"), x, y, TAB_TEX_W, TAB_TEX_H,
+                TAB_TEX_W, TAB_TEX_H, TINT_NORMAL);
+    }
+
+    public static void blitTabIcon(GuiGraphics g, int x, int y, int tint) {
+        blit(g, resolve("tab_icon_gear"), x, y, TAB_ICON_SIZE, TAB_ICON_SIZE,
+                TAB_ICON_SIZE, TAB_ICON_SIZE, tint);
     }
 
     public static void blit(GuiGraphics g, ResourceLocation texture, int x, int y, int width, int height,

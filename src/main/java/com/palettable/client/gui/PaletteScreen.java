@@ -7,12 +7,17 @@ import java.util.Locale;
 
 import com.palettable.Palettable;
 import com.palettable.client.BlockColorAnalyzer;
+import com.palettable.client.PalettableClient;
 import com.palettable.color.BlockColorEntry;
 import com.palettable.color.ColorUtil;
 import com.palettable.color.PaletteEngine;
 import com.palettable.palette.PaletteGuiSettings;
 import com.palettable.palette.PaletteStorage;
 import com.palettable.palette.SavedPalette;
+
+import org.lwjgl.glfw.GLFW;
+
+import com.mojang.blaze3d.platform.InputConstants;
 
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
@@ -31,7 +36,7 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Block;
 
 /**
- * Inventory-styled palette creator with two tabs (Creator / Saved Palettes), a visible+clickable
+ * Inventory-styled palette creator with Creator, Saved Palettes, and Settings tabs, a visible+clickable
  * hotbar, color-sortable search, and click-any-result-to-set-an-endpoint editing.
  */
 public class PaletteScreen extends Screen {
@@ -50,20 +55,15 @@ public class PaletteScreen extends Screen {
     private static final int GRADIENT_ROW_MIN = 3;
     private static final int GRADIENT_ROW_MAX = 10;
 
-    // Inventory-like palette.
-    private static final int COL_PANEL = 0xFFC6C6C6;
-    private static final int COL_HILIGHT = 0xFFFFFFFF;
-    private static final int COL_SHADOW = 0xFF555555;
-    private static final int COL_INSET_DARK = 0xFF373737;
-    private static final int COL_INSET_BG = 0xFF8B8B8B;
-    private static final int COL_INSET_SEL = 0xFFA8A8A8;
-    private static final int COL_TEXT = 0xFF252525;
-    private static final int COL_TEXT_MUTED = 0xFF4A4A4A;
+    // Inventory-like palette (non-skinned accents).
     private static final int COL_ACTIVE = 0xFFFFE14D;
     private static final int COL_HOVER = 0x60FFFFFF;
-    private static final int COL_DIVIDER = 0xFF9A9A9A;
 
     private static final double MAX_THRESHOLD = 40.0;
+
+    private GuiSkin theme() {
+        return GuiTextures.getSkin();
+    }
 
     // ---- Widgets ----
     private EditBox searchBox;
@@ -76,9 +76,12 @@ public class PaletteScreen extends Screen {
     private Button gradientZoomInButton;
     private Button gradientZoomOutButton;
     private ThresholdSlider thresholdSlider;
+    private Button skinCycleButton;
+    private Button swapMouseButton;
+    private Button keyBindButton;
 
     // ---- State ----
-    private int tab = 0; // 0 = creator, 1 = saved
+    private int tab = 0; // 0 = creator, 1 = saved, 2 = settings
     /** Visible row count in the gradient grid; fewer rows = larger icons (zoom in). */
     private int gradientRowCount = 7;
     private boolean fullBlocksOnly = false;
@@ -90,6 +93,8 @@ public class PaletteScreen extends Screen {
     /** User-curated palette slots (right-click search/gradient to fill). */
     private final Block[] paletteSlots = new Block[PALETTE_SLOT_COUNT];
     private String status = "";
+    private boolean swapMouseButtons = false;
+    private boolean listeningForKeyBind = false;
 
     private List<BlockColorEntry> allEntries = List.of();
     private List<BlockColorEntry> searchResults = List.of();
@@ -116,7 +121,8 @@ public class PaletteScreen extends Screen {
     private int hotbarX, hotbarY;
     private int savedListX, savedListY, savedListW, savedListRows;
     private int previewX, previewY;
-    private int tabX, tab0Y, tab1Y;
+    private int settingsRow1Y, settingsRow2Y, settingsRow3Y;
+    private int tabX, tab0Y, tab1Y, tab2Y;
     private static final int TAB_W = 28;
     private static final int TAB_H = 28;
 
@@ -159,9 +165,14 @@ public class PaletteScreen extends Screen {
         previewX = gradientX;
         previewY = top + 68;
 
+        settingsRow1Y = top + 28;
+        settingsRow2Y = top + 52;
+        settingsRow3Y = top + 76;
+
         tabX = left - TAB_W + 4;
         tab0Y = top + PAD;
         tab1Y = tab0Y + TAB_H + 2;
+        tab2Y = tab1Y + TAB_H + 2;
 
         int sortX = slotBX + CELL + GUTTER;
         maxFieldW = maxFieldW();
@@ -169,6 +180,14 @@ public class PaletteScreen extends Screen {
         int sliderX = sortX + 88 + GUTTER;
         int sliderRight = maxFieldX - GUTTER - this.font.width("Max") - 4;
         int sliderW = Math.max(72, sliderRight - sliderX);
+
+        PaletteGuiSettings guiSettings = PaletteGuiSettings.load();
+        GuiTextures.setSkin(GuiSkin.byIndex(guiSettings.guiSkin));
+        fullBlocksOnly = guiSettings.fullBlocksOnly;
+        sortByColor = guiSettings.sortByColor;
+        threshold = guiSettings.threshold;
+        gradientRowCount = loadGradientRowCount(guiSettings);
+        swapMouseButtons = guiSettings.swapMouseButtons;
 
         searchBox = addRenderableWidget(borderless(searchX, rowSearchY, searchFieldW, 16, "search blocks..."));
         searchBox.setResponder(s -> updateSearch());
@@ -181,20 +200,15 @@ public class PaletteScreen extends Screen {
                     b.setMessage(fullBlocksLabel());
                     updateSearch();
                     updateGradient();
-                }, GuiTextures.BUTTON));
+                }, "button"));
 
         sortButton = addRenderableWidget(TexturedButton.wide(
                 sortX, rowControlsY, 88, 16, sortLabel(), b -> {
                     sortByColor = !sortByColor;
                     b.setMessage(sortLabel());
                     updateSearch();
-                }, GuiTextures.BUTTON));
+                }, "button"));
 
-        PaletteGuiSettings guiSettings = PaletteGuiSettings.load();
-        fullBlocksOnly = guiSettings.fullBlocksOnly;
-        sortByColor = guiSettings.sortByColor;
-        threshold = guiSettings.threshold;
-        gradientRowCount = loadGradientRowCount(guiSettings);
         fullBlocksButton.setMessage(fullBlocksLabel());
         sortButton.setMessage(sortLabel());
 
@@ -210,10 +224,10 @@ public class PaletteScreen extends Screen {
         int zoomMinusX = zoomPlusX - GUTTER - zoomBtnSize;
         gradientZoomInButton = addRenderableWidget(TexturedButton.square(
                 zoomPlusX, zoomBtnY, zoomBtnSize, Component.literal("+"), b -> zoomGradientRows(-1),
-                GuiTextures.BUTTON_ZOOM_IN));
+                "button_zoom_in"));
         gradientZoomOutButton = addRenderableWidget(TexturedButton.square(
                 zoomMinusX, zoomBtnY, zoomBtnSize, Component.literal("-"), b -> zoomGradientRows(1),
-                GuiTextures.BUTTON_ZOOM_OUT));
+                "button_zoom_out"));
 
         nameBox = addRenderableWidget(borderless(searchX, rowSaveY, 196, 16, "palette name..."));
 
@@ -221,7 +235,7 @@ public class PaletteScreen extends Screen {
         saveButton = addRenderableWidget(TexturedButton.wide(
                 searchX + 196 + GUTTER, rowSaveY, saveW, 16,
                 Component.literal("Save palette"), b -> saveCurrent(),
-                GuiTextures.BUTTON));
+                "button"));
 
         loadButton = addRenderableWidget(TexturedButton.wide(
                 gradientX, top + PANEL_H - PAD - 16, COLS * CELL, 16,
@@ -229,15 +243,49 @@ public class PaletteScreen extends Screen {
                     if (selectedSaved >= 0 && selectedSaved < savedPalettes.size()) {
                         loadSaved(selectedSaved);
                     }
-                }, GuiTextures.BUTTON));
+                }, "button"));
+
+        int settingsControlW = COLS * CELL;
+        skinCycleButton = addRenderableWidget(TexturedButton.wide(
+                gradientX, settingsRow1Y, settingsControlW, 16, skinLabel(), b -> {
+                    GuiTextures.setSkin(GuiTextures.getSkin().next());
+                    b.setMessage(skinLabel());
+                    applyThemeTextColors();
+                    saveGuiSettings();
+                }, "button"));
+        swapMouseButton = addRenderableWidget(TexturedButton.wide(
+                gradientX, settingsRow2Y, settingsControlW, 16, swapMouseLabel(), b -> {
+                    swapMouseButtons = !swapMouseButtons;
+                    b.setMessage(swapMouseLabel());
+                    saveGuiSettings();
+                }, "button"));
+        keyBindButton = addRenderableWidget(TexturedButton.wide(
+                gradientX, settingsRow3Y, settingsControlW, 16, openKeyLabel(), b -> {
+                    listeningForKeyBind = true;
+                    b.setMessage(Component.translatable("palettable.settings.key_listening"));
+                }, "button"));
 
         savedPalettes = PaletteStorage.load();
 
         allEntries = BlockColorAnalyzer.getAll();
         updateSearch();
         updateGradient();
+        applyThemeTextColors();
         setTab(0);
         setInitialFocus(searchBox);
+    }
+
+    private void applyThemeTextColors() {
+        int fieldText = theme().textColor();
+        if (searchBox != null) {
+            searchBox.setTextColor(fieldText);
+        }
+        if (maxBox != null) {
+            maxBox.setTextColor(fieldText);
+        }
+        if (nameBox != null) {
+            nameBox.setTextColor(fieldText);
+        }
     }
 
     private static int maxFieldW() {
@@ -253,7 +301,7 @@ public class PaletteScreen extends Screen {
         int textY = fieldY + (fieldH - 8) / 2;
         EditBox box = new EditBox(this.font, fieldX + 4, textY, fieldW - 8, 8, Component.literal(""));
         box.setBordered(false);
-        box.setTextColor(0xE8E8E8);
+        box.setTextColor(theme().textColor());
         box.setMaxLength(64);
         if (hint != null) {
             box.setHint(Component.literal(hint));
@@ -269,10 +317,48 @@ public class PaletteScreen extends Screen {
         return Component.literal("Sort: " + (sortByColor ? "Color" : "Name"));
     }
 
+    private Component skinLabel() {
+        return Component.translatable("palettable.settings.skin", GuiTextures.getSkin().displayName());
+    }
+
+    private Component swapMouseLabel() {
+        return Component.translatable(swapMouseButtons
+                ? "palettable.settings.mouse_swapped"
+                : "palettable.settings.mouse_standard");
+    }
+
+    private Component openKeyLabel() {
+        Component key = PalettableClient.openPaletteKey != null
+                ? PalettableClient.openPaletteKey.getTranslatedKeyMessage()
+                : Component.literal("?");
+        return Component.literal("Open: ").append(key);
+    }
+
+    private boolean isPalettePickButton(int button) {
+        return swapMouseButtons ? button == 0 : button == 1;
+    }
+
+    private boolean isEndpointButton(int button) {
+        return swapMouseButtons ? button == 1 : button == 0;
+    }
+
+    private void applyOpenKey(InputConstants.Key key) {
+        PalettableClient.setOpenPaletteKey(key);
+        listeningForKeyBind = false;
+        if (keyBindButton != null) {
+            keyBindButton.setMessage(openKeyLabel());
+        }
+    }
+
     private void setTab(int newTab) {
         tab = newTab;
         this.setFocused(null);
+        listeningForKeyBind = false;
+        if (keyBindButton != null) {
+            keyBindButton.setMessage(openKeyLabel());
+        }
         boolean creator = tab == 0;
+        boolean settings = tab == 2;
         searchBox.visible = creator;
         fullBlocksButton.visible = creator;
         sortButton.visible = creator;
@@ -282,7 +368,10 @@ public class PaletteScreen extends Screen {
         saveButton.visible = creator;
         gradientZoomInButton.visible = creator;
         gradientZoomOutButton.visible = creator;
-        loadButton.visible = !creator && selectedSaved >= 0 && selectedSaved < savedPalettes.size();
+        loadButton.visible = tab == 1 && selectedSaved >= 0 && selectedSaved < savedPalettes.size();
+        skinCycleButton.visible = settings;
+        swapMouseButton.visible = settings;
+        keyBindButton.visible = settings;
     }
 
     private int gradientViewportH() {
@@ -571,17 +660,36 @@ public class PaletteScreen extends Screen {
         settings.threshold = threshold;
         settings.maxList = maxBox != null ? maxBox.getValue().trim() : "";
         settings.gradientRows = gradientRowCount;
+        settings.guiSkin = GuiTextures.getSkin().ordinal();
+        settings.swapMouseButtons = swapMouseButtons;
         PaletteGuiSettings.save(settings);
     }
 
+    /** Panel body labels — same flat draw path for every GUI palette. */
+    private void drawThemeString(GuiGraphics g, String text, int x, int y, int color) {
+        g.drawString(this.font, text, x, y, color, false);
+    }
+
     private void drawLabel(GuiGraphics g, String text, int x, int y) {
-        g.drawString(this.font, text, x, y, COL_TEXT, false);
+        drawThemeString(g, text, x, y, theme().textColor());
+    }
+
+    private void drawMuted(GuiGraphics g, String text, int x, int y) {
+        drawThemeString(g, text, x, y, theme().textMutedColor());
+    }
+
+    private String panelTitleText() {
+        return switch (tab) {
+            case 1 -> Component.translatable("screen.palettable.saved").getString();
+            case 2 -> Component.translatable("screen.palettable.settings").getString();
+            default -> this.title.getString();
+        };
     }
 
     private void drawPanelTitle(GuiGraphics g) {
-        String text = this.title.getString();
+        String text = panelTitleText();
         int x = left + (PANEL_W - this.font.width(text)) / 2;
-        g.drawString(this.font, text, x, top + 5, 0xFFFFFFFF, true);
+        drawThemeString(g, text, x, top + 5, theme().titleColor());
     }
 
     // ---- Rendering -------------------------------------------------------------------------------
@@ -612,8 +720,10 @@ public class PaletteScreen extends Screen {
         if (tab == 0) {
             hoveredEntry = renderCreator(g, mouseX, mouseY);
             hoveredStack = renderHotbar(g, mouseX, mouseY);
-        } else {
+        } else if (tab == 1) {
             hoveredEntry = renderSaved(g, mouseX, mouseY);
+        } else {
+            hoveredEntry = renderSettings(g, mouseX, mouseY);
         }
 
         if (!status.isEmpty()) {
@@ -634,14 +744,14 @@ public class PaletteScreen extends Screen {
     private void renderDeleteConfirmPopup(GuiGraphics g, int mouseX, int mouseY) {
         g.fill(left, top, left + PANEL_W, top + PANEL_H, 0x90000000);
         drawPanel(g, deleteConfirmX, deleteConfirmY, deleteConfirmW, deleteConfirmH);
-        g.drawString(this.font, "Delete?", deleteConfirmX + PAD, deleteConfirmY + 8, COL_TEXT, false);
-        drawActionButton(g, deleteConfirmYesX, deleteConfirmBtnY, GuiTextures.ACTION_CONFIRM, mouseX, mouseY);
-        drawActionButton(g, deleteConfirmNoX, deleteConfirmBtnY, GuiTextures.ACTION_DELETE, mouseX, mouseY);
+        drawLabel(g, "Delete?", deleteConfirmX + PAD, deleteConfirmY + 8);
+        drawActionButton(g, deleteConfirmYesX, deleteConfirmBtnY, "action_confirm", mouseX, mouseY);
+        drawActionButton(g, deleteConfirmNoX, deleteConfirmBtnY, "action_delete", mouseX, mouseY);
     }
 
-    private void drawActionButton(GuiGraphics g, int x, int y, ResourceLocation texture, int mouseX, int mouseY) {
+    private void drawActionButton(GuiGraphics g, int x, int y, String textureBase, int mouseX, int mouseY) {
         boolean hover = inside(mouseX, mouseY, x, y, GuiTextures.ACTION_BTN_SIZE, GuiTextures.ACTION_BTN_SIZE);
-        GuiTextures.blitActionButton(g, texture, x, y, hover ? GuiTextures.TINT_HOVER : GuiTextures.TINT_NORMAL);
+        GuiTextures.blitActionButton(g, textureBase, x, y, hover ? GuiTextures.TINT_HOVER : GuiTextures.TINT_NORMAL);
     }
 
     private BlockColorEntry renderCreator(GuiGraphics g, int mouseX, int mouseY) {
@@ -665,7 +775,7 @@ public class PaletteScreen extends Screen {
 
         if (gradient.isEmpty()) {
             String hint = (slotA == null || slotB == null) ? "Pick blocks for A and B" : "No matches; raise threshold";
-            g.drawString(this.font, hint, gradientX + 6, gridY + 4, COL_TEXT_MUTED, false);
+            drawMuted(g, hint, gradientX + 6, gridY + 4);
         }
 
         drawSectionRule(g, sectionRuleY);
@@ -720,11 +830,11 @@ public class PaletteScreen extends Screen {
     }
 
     private void drawColumnDivider(GuiGraphics g, int y1, int y2) {
-        g.fill(dividerX, y1, dividerX + 1, y2, COL_DIVIDER);
+        g.fill(dividerX, y1, dividerX + 1, y2, theme().dividerColor());
     }
 
     private void drawSectionRule(GuiGraphics g, int y) {
-        g.fill(left + PAD, y, left + PANEL_W - PAD, y + 1, COL_DIVIDER);
+        g.fill(left + PAD, y, left + PANEL_W - PAD, y + 1, theme().dividerColor());
     }
 
     /** Fixed-size gradient selection area; cells are stretched to tile it exactly at every zoom level. */
@@ -769,36 +879,56 @@ public class PaletteScreen extends Screen {
             }
             int ry = savedListY + r * 16;
             boolean sel = idx == selectedSaved;
-            g.fill(savedListX + 1, ry + 1, savedListX + savedListW - 1, ry + 15, sel ? COL_INSET_SEL : COL_INSET_BG);
+            drawInset(g, savedListX, ry, savedListW, 16);
+            if (sel) {
+                g.fill(savedListX + 1, ry + 1, savedListX + savedListW - 1, ry + 15, theme().selectionOverlay());
+            }
             String name = savedPalettes.get(idx).name;
-            g.drawString(this.font, trim(name, savedListW - 22), savedListX + 4, ry + 4, COL_TEXT, false);
+            drawLabel(g, trim(name, savedListW - 22), savedListX + 4, ry + 4);
             int xb = savedListX + savedListW - 15;
-            drawActionButton(g, xb, ry + 1, GuiTextures.ACTION_DELETE, mouseX, mouseY);
+            drawActionButton(g, xb, ry + 1, "action_delete", mouseX, mouseY);
         }
 
         if (savedPalettes.isEmpty()) {
-            g.drawString(this.font, "Save palettes from the Creator tab.", savedListX + 4, savedListY + 4, COL_TEXT_MUTED, false);
+            drawMuted(g, "Save palettes from the Creator tab.", savedListX + 4, savedListY + 4);
         }
 
         drawLabel(g, "Preview", previewX, top + 18);
 
         if (selectedSaved >= 0 && selectedSaved < savedPalettes.size()) {
             SavedPalette sp = savedPalettes.get(selectedSaved);
-            g.drawString(this.font, trim(sp.name, COLS * CELL), previewX, top + 30, COL_TEXT, false);
-            g.drawString(this.font, countSavedBlocks(sp) + " blocks", previewX + 44, top + 46, COL_TEXT, false);
+            drawLabel(g, trim(sp.name, COLS * CELL), previewX, top + 30);
+            drawMuted(g, countSavedBlocks(sp) + " blocks", previewX + 44, top + 46);
             return drawPaletteSlots(g, mouseX, mouseY, blocksFromSaved(sp), previewX, previewY, COLS);
         }
-        g.drawString(this.font, "Select a palette to preview.", previewX, top + 30, COL_TEXT_MUTED, false);
+        drawMuted(g, "Select a palette to preview.", previewX, top + 30);
+        return null;
+    }
+
+    private BlockColorEntry renderSettings(GuiGraphics g, int mouseX, int mouseY) {
+        drawLabel(g, Component.translatable("palettable.settings.skin_label").getString(), searchX, settingsRow1Y + 4);
+        drawLabel(g, Component.translatable("palettable.settings.mouse_label").getString(), searchX, settingsRow2Y + 4);
+        drawLabel(g, Component.translatable("palettable.settings.key_label").getString(), searchX, settingsRow3Y + 4);
         return null;
     }
 
     private void renderTabs(GuiGraphics g, int mouseX, int mouseY) {
         drawTab(g, tabX, tab0Y, tab == 0, new ItemStack(Palettable.PALETTE.get()), mouseX, mouseY);
         drawTab(g, tabX, tab1Y, tab == 1, new ItemStack(Items.BOOK), mouseX, mouseY);
+        drawTabIcon(g, tabX, tab2Y, tab == 2, mouseX, mouseY);
+    }
+
+    private void drawTabIcon(GuiGraphics g, int x, int y, boolean active, int mouseX, int mouseY) {
+        GuiTextures.blitTab(g, active, x, y);
+        int inset = (TAB_W - GuiTextures.TAB_ICON_SIZE) / 2;
+        GuiTextures.blitTabIcon(g, x + inset, y + inset, GuiTextures.TINT_NORMAL);
+        if (inside(mouseX, mouseY, x, y, TAB_W, TAB_H)) {
+            g.fill(x + 1, y + 1, x + TAB_W - 1, y + TAB_H - 1, COL_HOVER);
+        }
     }
 
     private void drawTab(GuiGraphics g, int x, int y, boolean active, ItemStack icon, int mouseX, int mouseY) {
-        GuiTextures.blitTab(g, active ? GuiTextures.TAB_ACTIVE : GuiTextures.TAB_INACTIVE, x, y);
+        GuiTextures.blitTab(g, active, x, y);
         g.renderItem(icon, x + 5, y + 5);
         if (inside(mouseX, mouseY, x, y, TAB_W, TAB_H)) {
             g.fill(x + 1, y + 1, x + TAB_W - 1, y + TAB_H - 1, COL_HOVER);
@@ -829,7 +959,7 @@ public class PaletteScreen extends Screen {
         if (block != null) {
             g.renderItem(new ItemStack(block), x + 1, y + 1);
         } else {
-            g.drawString(this.font, label, x + CELL / 2 - this.font.width(label) / 2, y + 5, COL_TEXT, false);
+            drawMuted(g, label, x + CELL / 2 - this.font.width(label) / 2, y + 5);
         }
         if (active) {
             g.renderOutline(x, y, CELL, CELL, COL_ACTIVE);
@@ -935,6 +1065,11 @@ public class PaletteScreen extends Screen {
             return true;
         }
 
+        if (listeningForKeyBind) {
+            applyOpenKey(InputConstants.Type.MOUSE.getOrCreate(button));
+            return true;
+        }
+
         if (inside(mouseX, mouseY, tabX, tab0Y, TAB_W, TAB_H)) {
             setTab(0);
             return true;
@@ -943,11 +1078,18 @@ public class PaletteScreen extends Screen {
             setTab(1);
             return true;
         }
+        if (inside(mouseX, mouseY, tabX, tab2Y, TAB_W, TAB_H)) {
+            setTab(2);
+            return true;
+        }
 
         if (tab == 0) {
             return creatorClicked(mouseX, mouseY, button);
         }
-        return savedClicked(mouseX, mouseY, button);
+        if (tab == 1) {
+            return savedClicked(mouseX, mouseY, button);
+        }
+        return false;
     }
 
     private boolean handleDeleteConfirmClick(double mouseX, double mouseY) {
@@ -976,19 +1118,19 @@ public class PaletteScreen extends Screen {
         }
 
         if (inside(mouseX, mouseY, slotAX, slotsY, CELL, CELL)) {
-            if (button == 1) {
+            if (isPalettePickButton(button)) {
                 slotA = null;
                 updateGradient();
-            } else {
+            } else if (isEndpointButton(button)) {
                 activeSlot = 0;
             }
             return true;
         }
         if (inside(mouseX, mouseY, slotBX, slotsY, CELL, CELL)) {
-            if (button == 1) {
+            if (isPalettePickButton(button)) {
                 slotB = null;
                 updateGradient();
-            } else {
+            } else if (isEndpointButton(button)) {
                 activeSlot = 1;
             }
             return true;
@@ -997,9 +1139,9 @@ public class PaletteScreen extends Screen {
         int sIdx = cellIndex(mouseX, mouseY, searchX, gridY, gridRows, searchScrollRow, CELL, COLS);
         if (sIdx >= 0 && sIdx < searchResults.size()) {
             Block block = searchResults.get(sIdx).block();
-            if (button == 1) {
+            if (isPalettePickButton(button)) {
                 addToPaletteSlot(block);
-            } else {
+            } else if (isEndpointButton(button)) {
                 assignToActiveSlot(block);
             }
             return true;
@@ -1007,9 +1149,9 @@ public class PaletteScreen extends Screen {
         int gIdx = gradientCellIndex(mouseX, mouseY);
         if (gIdx >= 0 && gIdx < gradient.size()) {
             Block block = gradient.get(gIdx).block();
-            if (button == 1) {
+            if (isPalettePickButton(button)) {
                 addToPaletteSlot(block);
-            } else {
+            } else if (isEndpointButton(button)) {
                 assignToActiveSlot(block);
             }
             return true;
@@ -1017,7 +1159,7 @@ public class PaletteScreen extends Screen {
 
         int pIdx = paletteSlotIndex(mouseX, mouseY);
         if (pIdx >= 0) {
-            if (button == 1) {
+            if (isPalettePickButton(button)) {
                 paletteSlots[pIdx] = null;
             }
             return true;
@@ -1029,7 +1171,7 @@ public class PaletteScreen extends Screen {
                 if (inside(mouseX, mouseY, hotbarX + i * GuiTextures.HOTBAR_SLOT_SIZE, hotbarY,
                         GuiTextures.HOTBAR_SLOT_SIZE, GuiTextures.HOTBAR_SLOT_SIZE)) {
                     ItemStack stack = player.getInventory().getItem(i);
-                    if (stack.getItem() instanceof BlockItem blockItem
+                    if (isEndpointButton(button) && stack.getItem() instanceof BlockItem blockItem
                             && BlockColorAnalyzer.get(blockItem.getBlock()) != null) {
                         assignToActiveSlot(blockItem.getBlock());
                     }
@@ -1096,7 +1238,7 @@ public class PaletteScreen extends Screen {
                 gradientScrollRow = clampScroll(gradientScrollRow - dir, gradient.size(), gradientVisibleRows(), gradientLayout().cols);
                 return true;
             }
-        } else {
+        } else if (tab == 1) {
             if (inside(mouseX, mouseY, savedListX, savedListY, savedListW, savedListRows * 16)) {
                 int max = Math.max(0, savedPalettes.size() - savedListRows);
                 savedListScroll = Math.max(0, Math.min(max, savedListScroll - dir));
@@ -1161,6 +1303,25 @@ public class PaletteScreen extends Screen {
     }
 
     @Override
+    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        if (listeningForKeyBind) {
+            if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
+                listeningForKeyBind = false;
+                if (keyBindButton != null) {
+                    keyBindButton.setMessage(openKeyLabel());
+                }
+                return true;
+            }
+            InputConstants.Key key = InputConstants.getKey(keyCode, scanCode);
+            if (key != InputConstants.UNKNOWN) {
+                applyOpenKey(key);
+            }
+            return true;
+        }
+        return super.keyPressed(keyCode, scanCode, modifiers);
+    }
+
+    @Override
     public void onClose() {
         saveGuiSettings();
         super.onClose();
@@ -1174,13 +1335,18 @@ public class PaletteScreen extends Screen {
     /** Threshold slider with editable track/handle PNGs. */
     private class ThresholdSlider extends TexturedSlider {
         ThresholdSlider(int x, int y, int w, int h) {
-            super(x, y, w, h, Component.empty(), clampValue(threshold / MAX_THRESHOLD));
+            super(x, y, w, h, Component.empty(), "slider_track", "slider_handle",
+                    clampValue(threshold / MAX_THRESHOLD));
             updateMessage();
         }
 
         void syncFromThreshold() {
             this.value = clampValue(threshold / MAX_THRESHOLD);
             updateMessage();
+        }
+
+        private static double clampValue(double value) {
+            return Mth.clamp(value, 0.0, 1.0);
         }
 
         @Override

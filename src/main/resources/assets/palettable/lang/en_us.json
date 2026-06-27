@@ -6,6 +6,16 @@
   "key.palettable.open": "Open Palette Creator",
 
   "screen.palettable.title": "Palette Creator",
+  "screen.palettable.saved": "Saved Palettes",
+  "screen.palettable.settings": "Settings",
+
+  "palettable.settings.skin_label": "GUI Palette",
+  "palettable.settings.skin": "GUI Palette: %s",
+  "palettable.settings.mouse_label": "Toggle mouse buttons",
+  "palettable.settings.mouse_standard": "M1: endpoint  M2: palette",
+  "palettable.settings.mouse_swapped": "M1: palette  M2: endpoint",
+  "palettable.settings.key_label": "Palette Creator keybind",
+  "palettable.settings.key_listening": "Press a key...",
 
   "palettable.configuration.title": "Palettable Config"
 }

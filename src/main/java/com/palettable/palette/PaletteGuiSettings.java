@@ -25,6 +25,10 @@ public final class PaletteGuiSettings {
     public int gradientRows = 7;
     /** @deprecated migrated to {@link #gradientRows} */
     public int gradientCellSize = 18;
+    /** {@link com.palettable.client.gui.GuiSkin#ordinal()}. */
+    public int guiSkin = 0;
+    /** When true, M1/M2 palette-creator actions are swapped. */
+    public boolean swapMouseButtons = false;
 
     public PaletteGuiSettings() {
         threshold = Config.GRADIENT_THRESHOLD.get();
